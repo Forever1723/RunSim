@@ -636,13 +636,13 @@ canvas.addEventListener('pointerdown', function (e) {
   var p = localPt(e);
   pointers[e.pointerId] = p;
   fly = null;
-
+gesture = { mode: 'pan', sx: p.x, sy: p.y, lat0: S.lat, lng0: S.lng, moved: false };
   if (pointerCount() === 1) {
     var idx = (!S.running && S.route.length) ? hitMarker(p) : -1;
     if (idx >= 0) {
       gesture = { mode: 'marker', idx: idx, moved: false };
     } else {
-      gesture = { mode: 'pan', sx: p.x, sy: p.y, cx: S.lat, cy: S.lng, moved: false };
+      
       tapTimer = setTimeout(function () {
         if (gesture && gesture.mode === 'pan' && !gesture.moved) gesture.long = true;
       }, 420);
@@ -704,8 +704,8 @@ canvas.addEventListener('pointermove', function (e) {
     }
     if (gesture.moved) {
       var z2 = S.z;
-      var cx2 = lngX(gesture.cx, z2) - dx;
-      var cy2 = latY(gesture.cy, z2) - dy;
+      var cx2 = lngX(gesture.lng0, z2) - dx;
+      var cy2 = latY(gesture.lat0, z2) - dy;
       S.lng = xToLng(cx2, z2);
       S.lat = clamp(yToLat(cy2, z2), -85, 85);
       dirty = true;
