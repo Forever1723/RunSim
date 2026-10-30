@@ -306,7 +306,8 @@ var S = {
   route: [],          // [{lat,lng}] WGS-84
   closed: true,
   track: [],          // [{lat,lng}] WGS-84
-  runner: null,       // {lat,lng,heading}
+  runner: null,       // {lat,lng,heading} 目标位置（由原生每秒推一次）
+  runnerShown: null,  // 屏幕上当前位置（插值后，避免一秒一跳）
   me: null,           // {lat,lng,acc}
   running: false,
   paused: false,
@@ -505,11 +506,22 @@ function drawRoute() {
 
 function drawTrack() {
   var t = S.track;
-  if (t.length < 2) return;
+  if (t.length < 1) return;
+  var head = S.runnerShown || S.runner;
   ctx.beginPath();
   for (var i = 0; i < t.length; i++) {
     var p = toScreen(t[i].lat, t[i].lng);
     if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+  }
+  // 轨迹末端接到跑者当前位置，线不会比点短一截（跳转后距离太远就不接）
+  if (head) {
+    var last = t[t.length - 1];
+    var gap = Math.hypot((head.lat - last.lat) * 111320,
+        (head.lng - last.lng) * 111320 * Math.cos(head.lat * D2R));
+    if (gap < 40) {
+      var hp = toScreen(head.lat, head.lng);
+      ctx.lineTo(hp.x, hp.y);
+    }
   }
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
@@ -543,8 +555,9 @@ function drawMe() {
 }
 
 function drawRunner() {
-  if (!S.runner) return;
-  var p = toScreen(S.runner.lat, S.runner.lng);
+  var pos = S.runnerShown || S.runner;
+  if (!pos) return;
+  var p = toScreen(pos.lat, pos.lng);
   var pulse = S.running ? (1 + 0.08 * Math.sin(performance.now() / 260)) : 1;
 
   var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 32 * pulse);
@@ -1008,6 +1021,7 @@ el('btnJump').addEventListener('click', function () {
   }
   clearRoute(true);
   S.runner = { lat: lat, lng: lng, heading: 0 };
+  startRunnerSegment();
   S.follow = false;
   flyTo(lat, lng, 16, 420);
   call('jumpTo', lat, lng);
@@ -1081,7 +1095,11 @@ window.RunUI = {
         if (d.hw !== undefined) S.hwAvailable = !!d.hw;
         if (d.kcal !== undefined) S.kcal = d.kcal;
         if (d.lat && d.lng) {
+          var changed = !S.runner ||
+              Math.abs(S.runner.lat - d.lat) > 1e-9 ||
+              Math.abs(S.runner.lng - d.lng) > 1e-9;
           S.runner = { lat: d.lat, lng: d.lng, heading: d.heading || 0 };
+          if (changed) startRunnerSegment();
         }
         if (d.finished) {
           S.finished = true;
@@ -1125,6 +1143,7 @@ window.RunUI = {
   jumpTo: function (lat, lng) {
     clearRoute(true);
     S.runner = { lat: lat, lng: lng, heading: 0 };
+    startRunnerSegment();
     S.follow = false;
     flyTo(lat, lng, 16, 420);
     dirty = true;
@@ -1144,6 +1163,7 @@ window.RunUI = {
       S.closed = (closed === '1' || closed === true);
       el('btnClosed').classList.toggle('on', S.closed);
       S.runner = { lat: S.route[0].lat, lng: S.route[0].lng, heading: 0 };
+      startRunnerSegment();
       setCenterWGS(S.runner.lat, S.runner.lng);
       updateRouteInfo();
       el('hint').classList.add('hide');
@@ -1162,14 +1182,20 @@ window.onBack = function () {
    ============================================================ */
 function frame(now) {
   try {
+    var dt = lastFrameAt ? Math.min(0.1, (now - lastFrameAt) / 1000) : 0.016;
+    lastFrameAt = now;
+
     stepFly(now);
-    if (S.running && S.follow && S.runner) {
+    smoothRunner(now);
+
+    if (S.running && S.follow && S.runnerShown) {
       // 平滑跟随（把跑者的 WGS 坐标转成地图坐标再插值）
-      var g = wgs2gcj(S.runner.lat, S.runner.lng);
+      var k = 1 - Math.exp(-dt * 4.5);
+      var g = wgs2gcj(S.runnerShown.lat, S.runnerShown.lng);
       var dx = g[0] - S.lat, dy = g[1] - S.lng;
       if (Math.abs(dx) > 1e-7 || Math.abs(dy) > 1e-7) {
-        S.lat += dx * 0.18;
-        S.lng += dy * 0.18;
+        S.lat += dx * k;
+        S.lng += dy * k;
         dirty = true;
       }
     }
@@ -1184,6 +1210,45 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+/**
+ * 跑者位置插值：原生每秒推一次坐标，直接画会"一秒跳一格"（约 3 米）。
+ * 这里把每次新坐标当成一段动画，用 0.95 秒匀速走完，看起来就是连续跑步；
+ * 下一帧新坐标到来时接着从当前位置走，不会跳。
+ */
+var lastFrameAt = 0;
+function startRunnerSegment() {
+  if (!S.runner) return;
+  var from = S.runnerShown ? S.runnerShown : S.runner;
+  var d = Math.hypot((S.runner.lat - from.lat) * 111320,
+      (S.runner.lng - from.lng) * 111320 * Math.cos(S.runner.lat * D2R));
+  if (d > 60) {                       // 换点、跳转：直接瞬移
+    S.runnerShown = { lat: S.runner.lat, lng: S.runner.lng };
+    S.seg = null;
+    dirty = true;
+    return;
+  }
+  S.seg = {
+    fLat: from.lat, fLng: from.lng,
+    tLat: S.runner.lat, tLng: S.runner.lng,
+    t0: performance.now()
+  };
+  if (!S.runnerShown) S.runnerShown = { lat: from.lat, lng: from.lng };
+}
+
+function smoothRunner(now) {
+  if (!S.runner) {
+    S.runnerShown = null;
+    S.seg = null;
+    return;
+  }
+  if (!S.seg) return;
+  var k = Math.min(1, (now - S.seg.t0) / 950);
+  S.runnerShown.lat = S.seg.fLat + (S.seg.tLat - S.seg.fLat) * k;
+  S.runnerShown.lng = S.seg.fLng + (S.seg.tLng - S.seg.fLng) * k;
+  dirty = true;
+  if (k >= 1) S.seg = null;
+}
+
 function init() {
   resize();
   window.addEventListener('resize', resize);
@@ -1195,6 +1260,8 @@ function init() {
       tiles.forEach(function (t) { if (t.ok) ok++; else if (t.err) err++; });
       document.title = 'z=' + S.z.toFixed(2) + ' lat=' + S.lat.toFixed(5) + ' lng=' + S.lng.toFixed(5) +
         ' ok=' + ok + ' err=' + err + ' cache=' + tiles.size + ' W=' + W + ' H=' + H +
+        ' shown=' + (S.runnerShown ? S.runnerShown.lat.toFixed(6) + ',' + S.runnerShown.lng.toFixed(6) : '-') +
+        ' tgt=' + (S.runner ? S.runner.lat.toFixed(6) + ',' + S.runner.lng.toFixed(6) : '-') +
         ' url=' + (tiles.size ? tileUrl(Math.round(S.z), 1, 1) : '-');
     }, 400);
   }
@@ -1206,6 +1273,7 @@ function init() {
                  [-0.0035, -0.0035], [-0.0025, 0.0025]];
     shape.forEach(function (p) { S.route.push({ lat: c.lat + p[0], lng: c.lng + p[1] }); });
     S.runner = { lat: S.route[0].lat, lng: S.route[0].lng, heading: 42 };
+    startRunnerSegment();
     S.track = S.route.slice(0, 4).map(function (p) { return { lat: p.lat, lng: p.lng }; });
     S.me = { lat: c.lat + 0.003, lng: c.lng - 0.0045, acc: 9 };
     S.dist = 3420;

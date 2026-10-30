@@ -299,7 +299,7 @@ public final class SimState {
         if (km > kmDone) {
             kmDone = km;
         }
-        if (elapsedMs - lastTrackMs >= 2000) addTrack();
+        if (elapsedMs - lastTrackMs >= 1000) addTrack();
 
         if (!routeClosed && routeS >= routeLen - 0.05) {
             running = false;
@@ -328,7 +328,8 @@ public final class SimState {
     }
 
     private static void addTrack() {
-        double r = accuracy * Math.sqrt(Math.random());
+        // 每秒记一个点；噪声控制在 0.7 米内，轨迹才不会毛刺成一片
+        double r = 0.7 * Math.sqrt(Math.random());
         double a = Math.random() * Math.PI * 2;
         track.add(new double[]{
                 toLat(y + Math.sin(a) * r),
