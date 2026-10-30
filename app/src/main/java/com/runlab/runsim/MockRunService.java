@@ -103,7 +103,6 @@ public class MockRunService extends Service {
         boolean fresh = !SimState.running;
         SimState.running = true;
         if (fresh) {
-            SimState.startWallMs = System.currentTimeMillis();
             SimState.lastTrackMs = SimState.elapsedMs - 999999;
         }
         acquireWakeLock();
