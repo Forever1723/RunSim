@@ -202,6 +202,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;heigh
   <button class="sbtn" id="btnJump">跳到该坐标</button>
   <div class="chips" id="cityChips"></div>
 
+  <h3>步数同步</h3>
+  <p>开启后不再按配速自己跑，而是<b>手机真的走了几步，就跑多远</b>：走路/摇手机产生真步数，模拟位置按步数前进，
+  这样其他 App 里的「步数」和「里程」天然对得上。关闭则按配速自动跑。</p>
+  <button class="sbtn" id="btnStepSync">步数同步：关</button>
+  <p id="syncHint" style="margin-top:-2px">需要「运动与健身」权限。放在摇步器上或拿在手里摇，约 3 步/秒 ≈ 3.2 m/s ≈ 5'10"/km。</p>
+
   <h3>使用步骤</h3>
   <ol class="hintlist">
     <li>打开开发者选项（连点版本号 7 次）</li>
@@ -306,6 +312,9 @@ var S = {
   paused: false,
   follow: true,
   myCentered: false,
+  stepSync: false,
+  hwAvailable: false,
+  actualPace: 0,
   layer: 'road',
   dist: 0, time: 0, pace: 330, hr: 0, kcal: 0,
   steps: 0, cad: 0,
@@ -850,11 +859,20 @@ function fmtSteps(n) {
 function updateNums() {
   el('nDist').textContent = (S.dist / 1000).toFixed(2);
   el('nTime').textContent = fmtTime(S.time);
-  el('nPace').textContent = fmtPace(S.pace);
+  el('nPace').textContent = fmtPace(S.running && S.actualPace > 0 ? S.actualPace : S.pace);
   el('nSteps').textContent = fmtSteps(S.steps);
   el('nCad').textContent = S.cad > 0 ? String(Math.round(S.cad)) : '--';
   el('nHr').textContent = S.hr > 0 ? String(Math.round(S.hr)) : '--';
   el('nKcal').textContent = String(Math.round(S.kcal || 0));
+  updateSyncBtn();
+}
+
+function updateSyncBtn() {
+  var b = el('btnStepSync');
+  if (!b) return;
+  b.textContent = '步数同步：' + (S.stepSync ? '开' : '关') + (S.stepSync && !S.hwAvailable ? '（未检测到计步）' : '');
+  b.style.color = S.stepSync ? '#2ee6a8' : '';
+  b.style.borderColor = S.stepSync ? '#1d4a3c' : '';
 }
 
 function setRunningUI(running) {
@@ -972,6 +990,15 @@ mask.addEventListener('click', closeSheet);
 el('btnDev').addEventListener('click', function () { call('openDevOptions'); });
 el('btnPerm').addEventListener('click', function () { call('requestPerms'); toast('已发起权限申请'); });
 
+el('btnStepSync').addEventListener('click', function () {
+  S.stepSync = !S.stepSync;
+  call('setStepSync', S.stepSync ? 1 : 0);
+  updateSyncBtn();
+  if (S.stepSync) {
+    toast(S.hwAvailable ? '步数同步已开：现在只有真的走出步数才会前进' : '已开启，等计步器就绪（需「运动与健身」权限）');
+  }
+});
+
 el('btnJump').addEventListener('click', function () {
   var lat = parseFloat(el('inLat').value);
   var lng = parseFloat(el('inLng').value);
@@ -1048,7 +1075,10 @@ window.RunUI = {
         }
         if (d.time !== undefined) S.time = d.time;
         if (d.pace !== undefined && d.pace > 0) S.pace = d.pace;
+        if (d.ap !== undefined) S.actualPace = d.ap;
         if (d.hr !== undefined) S.hr = d.hr;
+        if (d.sync !== undefined) S.stepSync = !!d.sync;
+        if (d.hw !== undefined) S.hwAvailable = !!d.hw;
         if (d.kcal !== undefined) S.kcal = d.kcal;
         if (d.lat && d.lng) {
           S.runner = { lat: d.lat, lng: d.lng, heading: d.heading || 0 };

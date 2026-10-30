@@ -11,6 +11,10 @@ import android.content.pm.ServiceInfo;
 import android.location.Criteria;
 import android.location.Location;
 import android.location.LocationManager;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -39,10 +43,26 @@ public class MockRunService extends Service {
     private Handler handler;
     private LocationManager lm;
     private PowerManager.WakeLock wakeLock;
+    private SensorManager sensorManager;
+    private Sensor stepSensor;
     private boolean gpsReady = false;
     private boolean networkReady = false;
     private long lastTickMs = 0;
     private int tickCount = 0;
+
+    /** 读取手机硬件计步器（开机以来的累计步数） */
+    private final SensorEventListener stepListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            if (event != null && event.values != null && event.values.length > 0) {
+                SimState.onHwSteps(event.values[0]);
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        }
+    };
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -66,6 +86,30 @@ public class MockRunService extends Service {
     public void onCreate() {
         super.onCreate();
         handler = new Handler(Looper.getMainLooper());
+        registerStepSensor();
+    }
+
+    private void registerStepSensor() {
+        try {
+            sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+            if (sensorManager == null) return;
+            stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER);
+            if (stepSensor == null) {
+                SimState.hwAvailable = false;
+                return;
+            }
+            sensorManager.registerListener(stepListener, stepSensor, SensorManager.SENSOR_DELAY_UI);
+        } catch (Exception e) {
+            Log.w(TAG, "step sensor: " + e.getClass().getSimpleName());
+            SimState.hwAvailable = false;
+        }
+    }
+
+    private void unregisterStepSensor() {
+        try {
+            if (sensorManager != null) sensorManager.unregisterListener(stepListener);
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
@@ -292,6 +336,7 @@ public class MockRunService extends Service {
     public void onDestroy() {
         SimState.running = false;
         if (handler != null) handler.removeCallbacksAndMessages(null);
+        unregisterStepSensor();
         releaseWakeLock();
         if (lm != null) {
             try {

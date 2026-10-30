@@ -232,11 +232,15 @@ public class MainActivity extends Activity {
                 + ",\"dist\":" + num(SimState.distance)
                 + ",\"time\":" + (SimState.elapsedMs / 1000.0)
                 + ",\"pace\":" + num(SimState.paceSec)
+                + ",\"ap\":" + num(SimState.speed > 0.1f ? 1000.0 / SimState.speed : 0)
                 + ",\"hr\":" + num(SimState.heartRate)
                 + ",\"kcal\":" + num(SimState.distance / 1000.0 * 62)
                 + ",\"lat\":" + num(lat)
                 + ",\"lng\":" + num(lng)
                 + ",\"heading\":" + num(SimState.heading)
+                + ",\"sync\":" + SimState.stepSync
+                + ",\"hw\":" + SimState.hwAvailable
+                + ",\"hwSteps\":" + num(SimState.hwSteps)
                 + "}";
         js("RunUI.onState(" + json + ")");
     }
@@ -367,6 +371,22 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() {
                     SimState.paceSec = pace;
+                }
+            });
+        }
+
+        /** 步数同步开关：1 开 / 0 关 */
+        @JavascriptInterface
+        public void setStepSync(final int on) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    SimState.setStepSync(on == 1);
+                    if (on == 1 && Build.VERSION.SDK_INT >= 29) {
+                        int st = checkSelfPermission(android.Manifest.permission.ACTIVITY_RECOGNITION);
+                        if (st != PackageManager.PERMISSION_GRANTED) requestPerms();
+                    }
+                    pushState();
                 }
             });
         }
@@ -505,7 +525,14 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{
                     android.Manifest.permission.ACCESS_FINE_LOCATION,
                     android.Manifest.permission.ACCESS_COARSE_LOCATION,
-                    android.Manifest.permission.POST_NOTIFICATIONS
+                    android.Manifest.permission.POST_NOTIFICATIONS,
+                    android.Manifest.permission.ACTIVITY_RECOGNITION
+            }, REQ_PERM);
+        } else if (Build.VERSION.SDK_INT >= 29) {
+            requestPermissions(new String[]{
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                    android.Manifest.permission.ACTIVITY_RECOGNITION
             }, REQ_PERM);
         } else {
             requestPermissions(new String[]{

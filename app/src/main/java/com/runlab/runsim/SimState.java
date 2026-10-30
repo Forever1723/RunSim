@@ -52,7 +52,32 @@ public final class SimState {
     public static int kmDone = 0;
     public static long lastTrackMs = -99999;
 
+    /* ---------------- 计步器同步 ----------------
+       开启后不再按配速自己跑，而是「手机真走了几步，就跑多远」，
+       这样校园跑等 App 里的硬件步数与 GPS 里程天然一致。 */
+    public static volatile boolean stepSync = false;
+    public static volatile float hwSteps = 0;        // 硬件累计步数（开机以来）
+    public static volatile boolean hwAvailable = false;
+    private static float lastHwSteps = -1;           // 上次采样值，用来看增量
+
     private SimState() {
+    }
+
+    public static synchronized void setStepSync(boolean on) {
+        stepSync = on;
+        lastHwSteps = -1;
+    }
+
+    public static synchronized void onHwSteps(float total) {
+        hwSteps = total;
+        hwAvailable = true;
+    }
+
+    /** 由配速推出的步幅（米/步），同步模式用它把步数换算成里程 */
+    public static double strideForPace() {
+        double v = 1000.0 / Math.max(60.0, (double) paceSec);
+        double cad = clamp(148 + 34 * (v / 4.2), 140, 196);
+        return v * 60 / cad;
     }
 
     /* ================= 坐标换算 ================= */
@@ -96,6 +121,7 @@ public final class SimState {
         running = false;
         track.clear();
         lastTrackMs = -99999;
+        lastHwSteps = -1;
     }
 
     /** 设置用户规划好的路线（WGS 经纬度点），并以第一个点为原点 */
@@ -218,6 +244,7 @@ public final class SimState {
         lastTrackMs = -99999;
         track.clear();
         routeS = 0;
+        lastHwSteps = -1;
         if (route.size() >= 2) {
             x = route.get(0)[0];
             y = route.get(0)[1];
@@ -234,9 +261,23 @@ public final class SimState {
         double sec = elapsedMs / 1000.0;
         double base = 1000.0 / Math.max(60.0, (double) paceSec);
         double wobble = 1 + 0.045 * Math.sin(sec / 9.1) + 0.02 * Math.sin(sec / 2.7 + 1.3);
-        speed = (float) (base * wobble);
 
-        double ds = speed * dt;
+        double v;
+        if (stepSync && hwAvailable) {
+            // 步数驱动：这一秒走了几步，就换算成多少米
+            float cur = hwSteps;
+            if (lastHwSteps < 0) lastHwSteps = cur;
+            double delta = cur - lastHwSteps;
+            lastHwSteps = cur;
+            if (delta < 0) delta = 0;                        // 计步器重启
+            if (delta > 40 * dt) delta = 40 * dt;            // 异常保护：每秒最多 40 步
+            v = delta * strideForPace() / dt;
+        } else {
+            v = base * wobble;
+        }
+        speed = (float) v;
+
+        double ds = v * dt;
         if (!routeClosed) {
             ds = Math.min(ds, Math.max(0, routeLen - routeS));
         }
