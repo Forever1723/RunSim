@@ -285,9 +285,12 @@ public final class SimState {
         routeS += ds;
 
         double[] p = pointAt(routeS);
-        x = p[0];
-        y = p[1];
-        heading = (float) Math.toDegrees(p[2]);
+        // 沿路线法线方向加一点随机摆动，让轨迹不踩着规划线走
+        double ang = p[2];
+        double off = wanderOffset(routeS);
+        x = p[0] - Math.sin(ang) * off;
+        y = p[1] + Math.cos(ang) * off;
+        heading = (float) Math.toDegrees(ang);
 
         float targetHr = (float) clamp(88 + 92 * (speed / 4.2), 95, 196);
         heartRate += (targetHr - heartRate) * Math.min(1f, (float) dt / 22f);
@@ -303,6 +306,25 @@ public final class SimState {
             finished = true;
             addTrack();
         }
+    }
+
+    /**
+     * 横向随机摆动（米）：三种不同波长的正弦叠加 —— 慢晃（路边宽窄）、
+     * 正常摆（约 15 秒一个来回）、细碎晃动。最大约 ±1.5 米。
+     * 波数按路线总长取整，保证绕一圈回到起点时偏移连续，不会突然跳一下。
+     */
+    private static double wanderOffset(double s) {
+        double L = Math.max(200.0, routeLen);
+        double twoPi = Math.PI * 2;
+        double w1 = twoPi * Math.max(4, Math.round(L / 45.0)) / L;    // 约 45 m 一个周期
+        double w2 = twoPi * Math.max(8, Math.round(L / 18.0)) / L;    // 约 18 m
+        double w3 = twoPi * Math.max(2, Math.round(L / 160.0)) / L;   // 约 160 m
+        double a = 0.62 * Math.sin(w1 * s + 1.7)
+                + 0.42 * Math.sin(w2 * s + 0.3)
+                + 0.62 * Math.sin(w3 * s + 2.9);
+        if (a > 1.8) a = 1.8;
+        if (a < -1.8) a = -1.8;
+        return a;
     }
 
     private static void addTrack() {

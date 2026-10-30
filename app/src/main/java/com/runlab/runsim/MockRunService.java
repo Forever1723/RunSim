@@ -234,9 +234,13 @@ public class MockRunService extends Service {
     }
 
     private Location buildLocation(double lat, double lng, String provider) {
+        // 真实 GPS 每秒都会有几米内的随机漂移，这里加 ±0.7 米，避免输出"完美直线"
+        double jitterLat = (Math.random() - 0.5) * 1.4 / 111320.0;
+        double jitterLng = (Math.random() - 0.5) * 1.4
+                / (111320.0 * Math.cos(Math.toRadians(lat)));
         Location loc = new Location(provider);
-        loc.setLatitude(lat);
-        loc.setLongitude(lng);
+        loc.setLatitude(lat + jitterLat);
+        loc.setLongitude(lng + jitterLng);
         loc.setAltitude(44.0 + 6.0 * Math.sin(SimState.distance / 900.0));
         loc.setAccuracy(SimState.accuracy);
         loc.setSpeed(SimState.speed);
