@@ -30,6 +30,9 @@ html,body{margin:0;height:100%;overflow:hidden;background:#060a0f;color:#e9f2f9;
 .chip.warn{border-color:#4a3a1d}
 .chip.warn i{background:var(--warn)}
 .nums{display:flex;gap:22px;margin-top:10px;align-items:flex-end}
+.sub{display:flex;gap:16px;margin-top:7px;font-size:11px;color:#c3d4e2;letter-spacing:.01em;
+  text-shadow:0 1px 5px rgba(0,0,0,.9),0 0 12px rgba(0,0,0,.7)}
+.sub b{color:#f0f7fd;font-weight:600;font-variant-numeric:tabular-nums}
 .nums div{display:flex;align-items:baseline;gap:3px}
 .nums b{font-size:23px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums;
   text-shadow:0 2px 12px rgba(0,0,0,.9)}
@@ -143,6 +146,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;heigh
     <div><b id="nDist">0.00</b><small>km</small></div>
     <div><b id="nTime">00:00</b><small>时长</small></div>
     <div><b id="nPace">5'30"</b><small>/km</small></div>
+  </div>
+  <div class="sub">
+    <span><b id="nSteps">0</b> 步</span>
+    <span><b id="nCad">--</b> 步/分</span>
+    <span><b id="nHr">--</b> bpm</span>
+    <span><b id="nKcal">0</b> kcal</span>
   </div>
 </div>
 
@@ -299,6 +308,7 @@ var S = {
   myCentered: false,
   layer: 'road',
   dist: 0, time: 0, pace: 330, hr: 0, kcal: 0,
+  steps: 0, cad: 0,
   finished: false
 };
 
@@ -335,23 +345,32 @@ function tileUrl(z, x, y) {
   return 'https://webrd0' + n + '.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=' + x + '&y=' + y + '&z=' + z;
 }
 
-var tiles = {};
-var tileCount = 0;
+var tiles = new Map();          // key -> {img, ok, err}，Map 保序，用来做 LRU
+var TILE_CACHE_MAX = 120;       // 一张 256×256 位图约 256KB，最多约 30MB
+
 function getTile(z, x, y) {
   var key = S.layer + '/' + z + '/' + x + '/' + y;
-  var t = tiles[key];
-  if (t) return t;
+  var t = tiles.get(key);
+  if (t) {
+    tiles.delete(key);          // 刷新到队尾（最近使用）
+    tiles.set(key, t);
+    return t;
+  }
   t = { img: new Image(), ok: false, err: false };
   t.img.onload = function () { t.ok = true; dirty = true; };
   t.img.onerror = function () { t.err = true; dirty = true; };
   t.img.src = tileUrl(z, x, y);
-  tiles[key] = t;
-  tileCount++;
-  if (tileCount > 420) {
-    // 简单清理：丢掉一半旧瓦片
-    var keys = Object.keys(tiles);
-    for (var i = 0; i < keys.length / 2; i++) delete tiles[keys[i]];
-    tileCount = keys.length / 2;
+  tiles.set(key, t);
+
+  if (tiles.size > TILE_CACHE_MAX) {
+    var oldest = tiles.keys().next().value;
+    var dead = tiles.get(oldest);
+    tiles.delete(oldest);
+    if (dead) {
+      dead.img.onload = null;
+      dead.img.onerror = null;
+      dead.img.src = '';
+    }
   }
   return t;
 }
@@ -636,13 +655,13 @@ canvas.addEventListener('pointerdown', function (e) {
   var p = localPt(e);
   pointers[e.pointerId] = p;
   fly = null;
-gesture = { mode: 'pan', sx: p.x, sy: p.y, lat0: S.lat, lng0: S.lng, moved: false };
+
   if (pointerCount() === 1) {
     var idx = (!S.running && S.route.length) ? hitMarker(p) : -1;
     if (idx >= 0) {
       gesture = { mode: 'marker', idx: idx, moved: false };
     } else {
-      
+      gesture = { mode: 'pan', sx: p.x, sy: p.y, lat0: S.lat, lng0: S.lng, moved: false };
       tapTimer = setTimeout(function () {
         if (gesture && gesture.mode === 'pan' && !gesture.moved) gesture.long = true;
       }, 420);
@@ -704,6 +723,7 @@ canvas.addEventListener('pointermove', function (e) {
     }
     if (gesture.moved) {
       var z2 = S.z;
+      // 注意：这里必须用「纬度喂 latY、经度喂 lngX」
       var cx2 = lngX(gesture.lng0, z2) - dx;
       var cy2 = latY(gesture.lat0, z2) - dy;
       S.lng = xToLng(cx2, z2);
@@ -822,10 +842,19 @@ function setStatus(kind, text) {
   el('statusText').textContent = text;
 }
 
+function fmtSteps(n) {
+  var s = String(Math.round(n));
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 function updateNums() {
   el('nDist').textContent = (S.dist / 1000).toFixed(2);
   el('nTime').textContent = fmtTime(S.time);
   el('nPace').textContent = fmtPace(S.pace);
+  el('nSteps').textContent = fmtSteps(S.steps);
+  el('nCad').textContent = S.cad > 0 ? String(Math.round(S.cad)) : '--';
+  el('nHr').textContent = S.hr > 0 ? String(Math.round(S.hr)) : '--';
+  el('nKcal').textContent = String(Math.round(S.kcal || 0));
 }
 
 function setRunningUI(running) {
@@ -875,6 +904,8 @@ el('btnReset').addEventListener('click', function () {
   S.dist = 0;
   S.hr = 0;
   S.kcal = 0;
+  S.steps = 0;
+  S.cad = 0;
   S.finished = false;
   S.follow = true;
   setRunningUI(false);
@@ -997,7 +1028,24 @@ window.RunUI = {
       var d = typeof json === 'string' ? JSON.parse(json) : json;
       if (d) {
         if (d.running !== undefined && d.running !== S.running) setRunningUI(!!d.running);
-        if (d.dist !== undefined) S.dist = d.dist;
+
+        // 步数：按「新增里程 / 当前步幅」累加，保证 步数 × 步幅 = 里程
+        if (d.dist !== undefined) {
+          var delta = d.dist - S.dist;
+          if (delta < -1) {          // 距离回退 = 重置/换路线
+            S.steps = 0;
+            S.cad = 0;
+          } else if (delta > 0) {
+            var v = (d.pace && d.pace > 0) ? 1000 / d.pace : 2.8;
+            var cad = clamp(148 + 34 * (v / 4.2), 140, 196);   // 步/分
+            var stride = v * 60 / cad;                          // 米/步
+            S.steps += delta / stride;
+            S.cad = cad;
+          }
+          S.dist = d.dist;
+        } else if (d.steps !== undefined) {
+          S.steps = d.steps;
+        }
         if (d.time !== undefined) S.time = d.time;
         if (d.pace !== undefined && d.pace > 0) S.pace = d.pace;
         if (d.hr !== undefined) S.hr = d.hr;
@@ -1083,20 +1131,25 @@ window.onBack = function () {
    9. 主循环 & 初始化
    ============================================================ */
 function frame(now) {
-  stepFly(now);
-  if (S.running && S.follow && S.runner) {
-    // 平滑跟随（把跑者的 WGS 坐标转成地图坐标再插值）
-    var g = wgs2gcj(S.runner.lat, S.runner.lng);
-    var dx = g[0] - S.lat, dy = g[1] - S.lng;
-    if (Math.abs(dx) > 1e-7 || Math.abs(dy) > 1e-7) {
-      S.lat += dx * 0.18;
-      S.lng += dy * 0.18;
-      dirty = true;
+  try {
+    stepFly(now);
+    if (S.running && S.follow && S.runner) {
+      // 平滑跟随（把跑者的 WGS 坐标转成地图坐标再插值）
+      var g = wgs2gcj(S.runner.lat, S.runner.lng);
+      var dx = g[0] - S.lat, dy = g[1] - S.lng;
+      if (Math.abs(dx) > 1e-7 || Math.abs(dy) > 1e-7) {
+        S.lat += dx * 0.18;
+        S.lng += dy * 0.18;
+        dirty = true;
+      }
     }
-  }
-  if (dirty) {
-    render();
-    dirty = false;
+    if (dirty) {
+      render();
+      dirty = false;
+    }
+  } catch (err) {
+    // 任何一次绘制异常都不能让主循环停掉，否则地图就永远停住了
+    if (window.console) console.error('render error', err);
   }
   requestAnimationFrame(frame);
 }
@@ -1105,6 +1158,16 @@ function init() {
   resize();
   window.addEventListener('resize', resize);
   setCenterWGS(S.lat, S.lng);
+
+  if (QS.has('debug')) {
+    setInterval(function () {
+      var ok = 0, err = 0;
+      tiles.forEach(function (t) { if (t.ok) ok++; else if (t.err) err++; });
+      document.title = 'z=' + S.z.toFixed(2) + ' lat=' + S.lat.toFixed(5) + ' lng=' + S.lng.toFixed(5) +
+        ' ok=' + ok + ' err=' + err + ' cache=' + tiles.size + ' W=' + W + ' H=' + H +
+        ' url=' + (tiles.size ? tileUrl(Math.round(S.z), 1, 1) : '-');
+    }, 400);
+  }
 
   // 预览模式（浏览器里直接打开时用来看效果）
   if (QS.has('demo')) {
@@ -1118,6 +1181,10 @@ function init() {
     S.dist = 3420;
     S.time = 1130;
     S.pace = 322;
+    S.cad = clamp(148 + 34 * ((1000 / S.pace) / 4.2), 140, 196);
+    S.steps = S.dist / ((1000 / S.pace) * 60 / S.cad);
+    S.hr = 152;
+    S.kcal = 212;
     setCenterWGS(S.runner.lat, S.runner.lng);
     S.z = 15;
     updateGpsChip();
